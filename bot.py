@@ -1,17 +1,20 @@
 import os
 import asyncio
+import logging
 from telegram import Update
 from telegram.ext import Application, ContextTypes, TypeHandler
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger("tgbot")
 
 TOKEN = os.getenv("TOKEN", "").strip()
 if not TOKEN:
     raise RuntimeError("TOKEN env var is missing. Add TOKEN in Railway Variables.")
 
-# Быстрее (если слишком быстро — поставь 0.06 или 0.08)
-STEP_DELAY_SEC = float(os.getenv("STEP_DELAY_SEC", "0.04"))
+STEP_DELAY_SEC = float(os.getenv("STEP_DELAY_SEC", "0.05"))
 FINAL_DELETE_DELAY_SEC = float(os.getenv("FINAL_DELETE_DELAY_SEC", "2"))
 
-PREFIX = "sdox"  # вместо hack
+PREFIX = "sdox"
 
 def is_cmd(text: str) -> bool:
     if not text:
@@ -19,26 +22,16 @@ def is_cmd(text: str) -> bool:
     t = text.strip()
     return t == "/hack" or t.startswith("/hack@") or t.startswith("/hack ")
 
-async def try_delete_user_cmd(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, bcid: str | None):
-    # Пытаемся удалить /hack. В личке Telegram часто не разрешает — тогда просто молча продолжаем.
+async def try_delete(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, bcid: str | None) -> tuple[bool, str]:
     try:
         await context.bot.delete_message(
             chat_id=chat_id,
             message_id=message_id,
             business_connection_id=bcid,
         )
-    except Exception:
-        pass
-
-async def try_delete_own(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, bcid: str | None):
-    try:
-        await context.bot.delete_message(
-            chat_id=chat_id,
-            message_id=message_id,
-            business_connection_id=bcid,
-        )
-    except Exception:
-        pass
+        return True, "ok"
+    except Exception as e:
+        return False, repr(e)
 
 async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message or update.message
@@ -51,34 +44,44 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = msg.chat_id
     bcid = getattr(msg, "business_connection_id", None)
 
-    # 1) попытка удалить твою команду
-    await try_delete_user_cmd(context, chat_id, msg.message_id, bcid)
+    log.info(f"Got /hack in chat_id={chat_id}, bcid={bcid}, from_update={'business_message' if update.business_message else 'message'}")
 
-    # 2) одно сообщение, которое редактируем (быстрее и без спама)
+    # 1) Пытаемся удалить твою команду
+    ok, err = await try_delete(context, chat_id, msg.message_id, bcid)
+    if ok:
+        log.info("Deleted user /hack message: OK")
+    else:
+        log.warning(f"Failed to delete user /hack message: {err}")
+
+    # 2) Отправляем прогресс-сообщение (это сообщение бота)
     sent = await context.bot.send_message(
         chat_id=chat_id,
         text=f"{PREFIX} 0%",
         business_connection_id=bcid,
     )
 
-    # 3) прогресс шагом 4% (25 правок вместо 100 — быстрее и стабильнее)
-    for p in range(4, 101, 4):
+    # 3) Ускоренный прогресс: 0,5,10...100 (21 правка)
+    for p in range(5, 101, 5):
         await asyncio.sleep(STEP_DELAY_SEC)
         try:
             await sent.edit_text(f"{PREFIX} {p}%")
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning(f"edit_text failed at {p}%: {repr(e)}")
 
-    # 4) финал
+    # 4) Финал
     await asyncio.sleep(STEP_DELAY_SEC)
     try:
         await sent.edit_text("successful!")
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning(f"final edit_text failed: {repr(e)}")
 
-    # 5) удалить через 2 сек (это сообщение бота — удалится почти всегда)
+    # 5) Удаляем сообщение бота через 2 сек
     await asyncio.sleep(FINAL_DELETE_DELAY_SEC)
-    await try_delete_own(context, chat_id, sent.message_id, bcid)
+    ok2, err2 = await try_delete(context, chat_id, sent.message_id, bcid)
+    if ok2:
+        log.info("Deleted bot message: OK")
+    else:
+        log.warning(f"Failed to delete bot message: {err2}")
 
 def main():
     app = Application.builder().token(TOKEN).build()
