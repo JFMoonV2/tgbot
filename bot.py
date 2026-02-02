@@ -2,7 +2,7 @@ import os
 import asyncio
 import random
 import aiohttp
-from telegram import Update
+from telegram import Update, MessageEntity
 from telegram.ext import Application, ContextTypes, TypeHandler
 
 TOKEN = os.getenv("TOKEN", "").strip()
@@ -11,6 +11,18 @@ if not TOKEN:
 
 API_BASE = f"https://api.telegram.org/bot{TOKEN}"
 FINAL_DELETE_DELAY_SEC = float(os.getenv("FINAL_DELETE_DELAY_SEC", "0.8"))
+
+CUSTOM_EMOJI_ID = os.getenv("CUSTOM_EMOJI_ID", "").strip()
+
+PERCENT_BASE = float(os.getenv("PERCENT_BASE", "0.045"))
+PERCENT_MIN = float(os.getenv("PERCENT_MIN", "0.028"))
+PERCENT_JITTER_LOW = float(os.getenv("PERCENT_JITTER_LOW", "-0.012"))
+PERCENT_JITTER_HIGH = float(os.getenv("PERCENT_JITTER_HIGH", "0.020"))
+
+TEXT_BASE = float(os.getenv("TEXT_BASE", "0.07"))
+TEXT_MIN = float(os.getenv("TEXT_MIN", "0.045"))
+TEXT_JITTER_LOW = float(os.getenv("TEXT_JITTER_LOW", "-0.015"))
+TEXT_JITTER_HIGH = float(os.getenv("TEXT_JITTER_HIGH", "0.030"))
 
 def is_cmd(text: str) -> bool:
     if not text:
@@ -33,46 +45,46 @@ async def delete_business_messages(business_connection_id: str | None, message_i
 
 def rand_inc() -> int:
     r = random.random()
-    if r < 0.45:
-        return 1
-    if r < 0.79:
+    if r < 0.32:
         return 2
-    if r < 0.93:
+    if r < 0.70:
         return 3
-    return 4
+    if r < 0.92:
+        return 4
+    return 1
 
-def build_steps() -> list[str]:
-    steps = []
-    p = 1
-    steps.append(f"Encrypting {p}%")
-    while p < 93:
-        if random.random() < 0.05:
-            steps.append(f"Encrypting {p}%")
+def emoji_prefix() -> tuple[str, list[MessageEntity] | None]:
+    if CUSTOM_EMOJI_ID:
+        return "▫", [MessageEntity(type="custom_emoji", offset=0, length=1, custom_emoji_id=CUSTOM_EMOJI_ID)]
+    return "⚪️", None
+
+def build_percent_values(start: int, end: int) -> list[int]:
+    vals = [start]
+    p = start
+    while p < end:
+        if random.random() < 0.04:
+            vals.append(p)
             continue
-        p = min(93, p + rand_inc())
-        steps.append(f"Encrypting {p}%")
+        p = min(end, p + rand_inc())
+        vals.append(p)
+    return vals
 
-    steps.append("⚪️Encrypting completed")
+async def sleep_percent():
+    jitter = random.uniform(PERCENT_JITTER_LOW, PERCENT_JITTER_HIGH)
+    await asyncio.sleep(max(PERCENT_MIN, PERCENT_BASE + jitter))
 
-    loops = random.randint(3, 4)
-    for _ in range(loops):
-        steps.append("Opening json codec.")
-        steps.append("Opening json codec..")
-        steps.append("Opening json codec...")
+async def sleep_text():
+    jitter = random.uniform(TEXT_JITTER_LOW, TEXT_JITTER_HIGH)
+    await asyncio.sleep(max(TEXT_MIN, TEXT_BASE + jitter))
 
-    steps.append("⚪️Success")
-
-    rp = 1
-    steps.append(f"Rematching data {rp}%")
-    while rp < 96:
-        if random.random() < 0.05:
-            steps.append(f"Rematching data {rp}%")
-            continue
-        rp = min(96, rp + rand_inc())
-        steps.append(f"Rematching data {rp}%")
-
-    steps.append("⚪️Successful")
-    return steps
+async def send_or_edit(sent, context, chat_id, bcid, text, entities):
+    if sent is None:
+        return await context.bot.send_message(chat_id=chat_id, text=text, business_connection_id=bcid, entities=entities)
+    try:
+        await sent.edit_text(text, entities=entities)
+    except Exception:
+        pass
+    return sent
 
 async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message or update.message
@@ -86,25 +98,38 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await delete_business_messages(bcid, [msg.message_id])
 
-    steps = build_steps()
+    circle, circle_entities = emoji_prefix()
 
-    sent = await context.bot.send_message(
-        chat_id=chat_id,
-        text=steps[0],
-        business_connection_id=bcid,
-    )
+    sent = None
 
-    base = 0.085
-    for i in range(1, len(steps)):
-        jitter = random.uniform(-0.02, 0.045)
-        await asyncio.sleep(max(0.05, base + jitter))
-        try:
-            await sent.edit_text(steps[i])
-        except Exception:
-            pass
+    for p in build_percent_values(1, 93):
+        sent = await send_or_edit(sent, context, chat_id, bcid, f"Encrypting {p}%", None)
+        await sleep_percent()
+
+    sent = await send_or_edit(sent, context, chat_id, bcid, f"{circle}Encrypting completed", circle_entities)
+    await sleep_text()
+
+    loops = random.randint(3, 4)
+    for _ in range(loops):
+        sent = await send_or_edit(sent, context, chat_id, bcid, "Opening json codec.", None)
+        await sleep_text()
+        sent = await send_or_edit(sent, context, chat_id, bcid, "Opening json codec..", None)
+        await sleep_text()
+        sent = await send_or_edit(sent, context, chat_id, bcid, "Opening json codec...", None)
+        await sleep_text()
+
+    sent = await send_or_edit(sent, context, chat_id, bcid, f"{circle}Success", circle_entities)
+    await sleep_text()
+
+    for p in build_percent_values(29, 96):
+        sent = await send_or_edit(sent, context, chat_id, bcid, f"Rematching data {p}%", None)
+        await sleep_percent()
+
+    sent = await send_or_edit(sent, context, chat_id, bcid, f"{circle}Successful", circle_entities)
 
     await asyncio.sleep(FINAL_DELETE_DELAY_SEC)
-    await delete_business_messages(bcid, [sent.message_id])
+    if sent is not None:
+        await delete_business_messages(bcid, [sent.message_id])
 
 def main():
     app = Application.builder().token(TOKEN).build()
