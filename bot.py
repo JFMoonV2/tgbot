@@ -41,12 +41,15 @@ def is_dox(t):
 async def delete_business_messages(bcid, ids):
     if not bcid:
         return
-    url = f"{API_BASE}/deleteBusinessMessages"
-    async with aiohttp.ClientSession() as s:
-        try:
-            await s.post(url, json={"business_connection_id": bcid, "message_ids": ids}, timeout=5)
-        except:
-            pass
+    try:
+        async with aiohttp.ClientSession() as s:
+            await s.post(
+                f"{API_BASE}/deleteBusinessMessages",
+                json={"business_connection_id": bcid, "message_ids": ids},
+                timeout=5
+            )
+    except:
+        pass
 
 def rand_inc():
     r = random.random()
@@ -121,10 +124,12 @@ async def run_dox(ctx, chat_id, bcid):
         "TCP OPEN PORTS: 8080, 80",
         "UDP OPEN PORTS: 53"
     ]
-    m = await ctx.bot.send_message(chat_id, lines[0], business_connection_id=bcid)
+    text = lines[0]
+    m = await ctx.bot.send_message(chat_id, text, business_connection_id=bcid)
     for line in lines[1:]:
         await asyncio.sleep(0.7)
-        try: await m.edit_text(m.text + "\n" + line)
+        text += "\n" + line
+        try: await m.edit_text(text)
         except: pass
     await asyncio.sleep(FINAL_DELETE_DELAY_SEC)
     await delete_business_messages(bcid, [m.message_id])
@@ -156,8 +161,11 @@ async def handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_mute(msg.text):
         owner_id_by_chat[chat_id] = from_id
         muted_chats.add(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
-        m = await ctx.bot.send_message(chat_id, "Помолчи-ка, ты пока что в муте и не можешь писать", business_connection_id=bcid)
+        m = await ctx.bot.send_message(
+            chat_id,
+            "Помолчи-ка, ты пока что в муте и не можешь писать",
+            business_connection_id=bcid
+        )
         await asyncio.sleep(0.1)
         await delete_business_messages(bcid, [m.message_id])
         return
@@ -165,8 +173,11 @@ async def handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_unmute(msg.text):
         owner_id_by_chat[chat_id] = from_id
         muted_chats.discard(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
-        m = await ctx.bot.send_message(chat_id, "Все, можешь говорить <3", business_connection_id=bcid)
+        m = await ctx.bot.send_message(
+            chat_id,
+            "Все, можешь говорить <3",
+            business_connection_id=bcid
+        )
         await asyncio.sleep(0.1)
         await delete_business_messages(bcid, [m.message_id])
         return
