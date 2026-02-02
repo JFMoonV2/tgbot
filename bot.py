@@ -24,11 +24,26 @@ TEXT_JITTER_HIGH = float(os.getenv("TEXT_JITTER_HIGH", "0.020"))
 
 CIRCLE = "⚪️"
 
+muted_chats = set()
+owner_id_by_chat = {}
+
 def is_cmd(text: str) -> bool:
     if not text:
         return False
     t = text.strip()
+    return t.startswith(".")
+
+def is_protocol(text: str) -> bool:
+    t = (text or "").strip()
     return t == ".protocol" or t.startswith(".protocol@") or t.startswith(".protocol ")
+
+def is_mute(text: str) -> bool:
+    t = (text or "").strip()
+    return t == ".mute" or t.startswith(".mute@") or t.startswith(".mute ")
+
+def is_unmute(text: str) -> bool:
+    t = (text or "").strip()
+    return t == ".unmute" or t.startswith(".unmute@") or t.startswith(".unmute ")
 
 async def delete_business_messages(business_connection_id: str | None, message_ids: list[int]) -> bool:
     if not business_connection_id:
@@ -72,18 +87,7 @@ async def sleep_text():
     jitter = random.uniform(TEXT_JITTER_LOW, TEXT_JITTER_HIGH)
     await asyncio.sleep(max(TEXT_MIN, TEXT_BASE + jitter))
 
-async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.business_message or update.message
-    if not msg or not msg.text:
-        return
-    if not is_cmd(msg.text):
-        return
-
-    chat_id = msg.chat_id
-    bcid = getattr(msg, "business_connection_id", None)
-
-    await delete_business_messages(bcid, [msg.message_id])
-
+async def run_protocol(context: ContextTypes.DEFAULT_TYPE, chat_id: int, bcid: str | None):
     sent = await context.bot.send_message(
         chat_id=chat_id,
         text="Encrypting 1%",
@@ -142,6 +146,55 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await asyncio.sleep(FINAL_DELETE_DELAY_SEC)
     await delete_business_messages(bcid, [sent.message_id])
+
+async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = update.business_message or update.message
+    if not msg:
+        return
+
+    chat_id = msg.chat_id
+    bcid = getattr(msg, "business_connection_id", None)
+    from_id = getattr(getattr(msg, "from_user", None), "id", None)
+
+    if chat_id in muted_chats:
+        owner_id = owner_id_by_chat.get(chat_id)
+        if owner_id and from_id and from_id != owner_id:
+            await delete_business_messages(bcid, [msg.message_id])
+            return
+
+    if not msg.text:
+        return
+
+    if is_protocol(msg.text):
+        if from_id:
+            owner_id_by_chat[chat_id] = from_id
+        await delete_business_messages(bcid, [msg.message_id])
+        await run_protocol(context, chat_id, bcid)
+        return
+
+    if is_mute(msg.text):
+        if from_id:
+            owner_id_by_chat[chat_id] = from_id
+        muted_chats.add(chat_id)
+        await delete_business_messages(bcid, [msg.message_id])
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Помолчи-ка, ты пока что в муте и не можешь писать",
+            business_connection_id=bcid,
+        )
+        return
+
+    if is_unmute(msg.text):
+        if from_id:
+            owner_id_by_chat[chat_id] = from_id
+        muted_chats.discard(chat_id)
+        await delete_business_messages(bcid, [msg.message_id])
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Все, можешь говорить <3",
+            business_connection_id=bcid,
+        )
+        return
 
 def main():
     app = Application.builder().token(TOKEN).build()
