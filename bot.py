@@ -10,11 +10,7 @@ if not TOKEN:
 
 API_BASE = f"https://api.telegram.org/bot{TOKEN}"
 
-# быстрее/медленнее:
-STEP_DELAY_SEC = float(os.getenv("STEP_DELAY_SEC", "0.04"))
-FINAL_DELETE_DELAY_SEC = float(os.getenv("FINAL_DELETE_DELAY_SEC", "2"))
-
-PREFIX = "sdox"
+FINAL_DELETE_DELAY_SEC = float(os.getenv("FINAL_DELETE_DELAY_SEC", "0.8"))
 
 def is_cmd(text: str) -> bool:
     if not text:
@@ -23,19 +19,10 @@ def is_cmd(text: str) -> bool:
     return t == "/hack" or t.startswith("/hack@") or t.startswith("/hack ")
 
 async def delete_business_messages(business_connection_id: str | None, message_ids: list[int]) -> bool:
-    """
-    Правильный способ удаления в Telegram Business: deleteBusinessMessages.
-    Требует включённых прав в Business (can_delete_sent_messages/can_delete_all_messages).
-    """
     if not business_connection_id:
         return False
-
     url = f"{API_BASE}/deleteBusinessMessages"
-    payload = {
-        "business_connection_id": business_connection_id,
-        "message_ids": message_ids,
-    }
-
+    payload = {"business_connection_id": business_connection_id, "message_ids": message_ids}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=payload, timeout=10) as resp:
@@ -43,6 +30,35 @@ async def delete_business_messages(business_connection_id: str | None, message_i
                 return bool(data.get("ok")) and bool(data.get("result"))
     except Exception:
         return False
+
+# Твои шаги (каждый элемент = текст, который будет стоять в сообщении)
+STEPS = [
+    "Encrypting 1%",
+    "Encrypting 9%",
+    "Encrypting 23%",
+    "Encrypting 41%",
+    "Encrypting 69%",
+    "Encrypting 73%",
+    "Encrypting 87%",
+    "Encrypting 93%",
+    "⚪️Encrypting completed",
+    "Opening json codec..",
+    "Opening json codec...",
+    "⚪️Success",
+    "Rematching data 29%",
+    "Rematching data 45%",
+    "Rematching data 78%",
+    "Rematching data 96%",
+    "⚪️Successful",
+]
+
+# Задержки между шагами (сек). Если хочешь быстрее/медленнее — меняй тут.
+# Длина должна совпадать с количеством STEPS-1 (между шагами).
+DELAYS = [
+    0.08, 0.08, 0.10, 0.10, 0.10, 0.08, 0.08, 0.10,
+    0.12, 0.10, 0.12, 0.10,
+    0.10, 0.10, 0.10, 0.10
+]
 
 async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message or update.message
@@ -55,33 +71,25 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = msg.chat_id
     bcid = getattr(msg, "business_connection_id", None)
 
-    # 1) Пытаемся удалить твоё /hack (как у “мут” ботов)
-    # Это сработает только если Telegram реально разрешил через business rights.
+    # удалить /hack
     await delete_business_messages(bcid, [msg.message_id])
 
-    # 2) Отправляем одно сообщение и редактируем его (на behalf владельца бизнес-аккаунта)
+    # отправить первое состояние
     sent = await context.bot.send_message(
         chat_id=chat_id,
-        text=f"{PREFIX} 0%",
+        text=STEPS[0],
         business_connection_id=bcid,
     )
 
-    # 3) Быстрый прогресс (шаг 4% = меньше edit'ов и меньше шанс лимитов)
-    for p in range(4, 101, 4):
-        await asyncio.sleep(STEP_DELAY_SEC)
+    # проиграть шаги
+    for i in range(1, len(STEPS)):
+        await asyncio.sleep(DELAYS[i - 1])
         try:
-            await sent.edit_text(f"{PREFIX} {p}%")
+            await sent.edit_text(STEPS[i])
         except Exception:
             pass
 
-    # 4) Финал
-    await asyncio.sleep(STEP_DELAY_SEC)
-    try:
-        await sent.edit_text("successful!")
-    except Exception:
-        pass
-
-    # 5) Удаляем сообщение бота/“от имени юзера” через 2 сек именно бизнес-методом
+    # удалить через 0.8 сек
     await asyncio.sleep(FINAL_DELETE_DELAY_SEC)
     await delete_business_messages(bcid, [sent.message_id])
 
