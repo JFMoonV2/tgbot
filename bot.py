@@ -1,64 +1,77 @@
 import os
 import asyncio
+import aiohttp
 from telegram import Update
 from telegram.ext import Application, ContextTypes, TypeHandler
 
-# Railway Variables -> TOKEN
 TOKEN = os.getenv("TOKEN", "").strip()
 if not TOKEN:
     raise RuntimeError("TOKEN env var is missing. Add TOKEN in Railway Variables.")
 
-# Скорость (меньше = быстрее). Если начнёт лагать/пропускать — поставь 0.05-0.08
+API_BASE = f"https://api.telegram.org/bot{TOKEN}"
+
+# быстрее/медленнее:
 STEP_DELAY_SEC = float(os.getenv("STEP_DELAY_SEC", "0.04"))
-# Через сколько секунд удалить сообщение бота после successful!
 FINAL_DELETE_DELAY_SEC = float(os.getenv("FINAL_DELETE_DELAY_SEC", "2"))
 
-PREFIX = "sdox"  # вместо hack
+PREFIX = "sdox"
 
-def is_hack_command(text: str) -> bool:
+def is_cmd(text: str) -> bool:
     if not text:
         return False
     t = text.strip()
     return t == "/hack" or t.startswith("/hack@") or t.startswith("/hack ")
 
-async def delete_message_safe(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+async def delete_business_messages(business_connection_id: str | None, message_ids: list[int]) -> bool:
     """
-    ВАЖНО: В python-telegram-bot delete_message НЕ принимает business_connection_id.
-    Поэтому удаляем без него. Это удаляет сообщения бота стабильно.
+    Правильный способ удаления в Telegram Business: deleteBusinessMessages.
+    Требует включённых прав в Business (can_delete_sent_messages/can_delete_all_messages).
     """
+    if not business_connection_id:
+        return False
+
+    url = f"{API_BASE}/deleteBusinessMessages"
+    payload = {
+        "business_connection_id": business_connection_id,
+        "message_ids": message_ids,
+    }
+
     try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+        async with aiohttp.ClientSession() as session:
+            async with session.post(url, json=payload, timeout=10) as resp:
+                data = await resp.json()
+                return bool(data.get("ok")) and bool(data.get("result"))
     except Exception:
-        pass
+        return False
 
 async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message or update.message
     if not msg or not msg.text:
         return
 
-    if not is_hack_command(msg.text):
+    if not is_cmd(msg.text):
         return
 
     chat_id = msg.chat_id
     bcid = getattr(msg, "business_connection_id", None)
 
-    # 1) Пытаемся удалить твою /hack (в личке часто запрещено — поэтому может не удалиться)
-    await delete_message_safe(context, chat_id, msg.message_id)
+    # 1) Пытаемся удалить твоё /hack (как у “мут” ботов)
+    # Это сработает только если Telegram реально разрешил через business rights.
+    await delete_business_messages(bcid, [msg.message_id])
 
-    # 2) Отправляем одно сообщение и редактируем его (это сообщение бота)
+    # 2) Отправляем одно сообщение и редактируем его (на behalf владельца бизнес-аккаунта)
     sent = await context.bot.send_message(
         chat_id=chat_id,
         text=f"{PREFIX} 0%",
-        business_connection_id=bcid,  # для business-чатов
+        business_connection_id=bcid,
     )
 
-    # 3) Быстрый прогресс: шаг 4% (25 редактирований — быстро и без лимитов)
+    # 3) Быстрый прогресс (шаг 4% = меньше edit'ов и меньше шанс лимитов)
     for p in range(4, 101, 4):
         await asyncio.sleep(STEP_DELAY_SEC)
         try:
             await sent.edit_text(f"{PREFIX} {p}%")
         except Exception:
-            # если Telegram ограничил частоту редактирования — просто пропустим шаг
             pass
 
     # 4) Финал
@@ -68,9 +81,9 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    # 5) Удаляем сообщение бота через 2 секунды
+    # 5) Удаляем сообщение бота/“от имени юзера” через 2 сек именно бизнес-методом
     await asyncio.sleep(FINAL_DELETE_DELAY_SEC)
-    await delete_message_safe(context, chat_id, sent.message_id)
+    await delete_business_messages(bcid, [sent.message_id])
 
 def main():
     app = Application.builder().token(TOKEN).build()
