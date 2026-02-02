@@ -12,15 +12,15 @@ if not TOKEN:
 API_BASE = f"https://api.telegram.org/bot{TOKEN}"
 FINAL_DELETE_DELAY_SEC = float(os.getenv("FINAL_DELETE_DELAY_SEC", "0.8"))
 
-PERCENT_BASE = float(os.getenv("PERCENT_BASE", "0.038"))
-PERCENT_MIN = float(os.getenv("PERCENT_MIN", "0.024"))
-PERCENT_JITTER_LOW = float(os.getenv("PERCENT_JITTER_LOW", "-0.010"))
-PERCENT_JITTER_HIGH = float(os.getenv("PERCENT_JITTER_HIGH", "0.016"))
+PERCENT_BASE = float(os.getenv("PERCENT_BASE", "0.032"))
+PERCENT_MIN = float(os.getenv("PERCENT_MIN", "0.020"))
+PERCENT_JITTER_LOW = float(os.getenv("PERCENT_JITTER_LOW", "-0.009"))
+PERCENT_JITTER_HIGH = float(os.getenv("PERCENT_JITTER_HIGH", "0.014"))
 
-TEXT_BASE = float(os.getenv("TEXT_BASE", "0.058"))
-TEXT_MIN = float(os.getenv("TEXT_MIN", "0.040"))
-TEXT_JITTER_LOW = float(os.getenv("TEXT_JITTER_LOW", "-0.012"))
-TEXT_JITTER_HIGH = float(os.getenv("TEXT_JITTER_HIGH", "0.024"))
+TEXT_BASE = float(os.getenv("TEXT_BASE", "0.050"))
+TEXT_MIN = float(os.getenv("TEXT_MIN", "0.035"))
+TEXT_JITTER_LOW = float(os.getenv("TEXT_JITTER_LOW", "-0.010"))
+TEXT_JITTER_HIGH = float(os.getenv("TEXT_JITTER_HIGH", "0.020"))
 
 CIRCLE = "⚪️"
 
@@ -45,11 +45,11 @@ async def delete_business_messages(business_connection_id: str | None, message_i
 
 def rand_inc() -> int:
     r = random.random()
-    if r < 0.40:
+    if r < 0.44:
         return 2
-    if r < 0.76:
+    if r < 0.80:
         return 3
-    if r < 0.93:
+    if r < 0.94:
         return 4
     return 1
 
@@ -57,7 +57,7 @@ def build_percent_values(start: int, end: int) -> list[int]:
     vals = [start]
     p = start
     while p < end:
-        if random.random() < 0.035:
+        if random.random() < 0.03:
             vals.append(p)
             continue
         p = min(end, p + rand_inc())
@@ -127,8 +127,7 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-    vals = build_percent_values(29, 96)
-    for p in vals:
+    for p in build_percent_values(29, 96):
         await sleep_percent()
         try:
             await sent.edit_text(f"Rematching data {p}%")
