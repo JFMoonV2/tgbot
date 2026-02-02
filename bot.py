@@ -10,7 +10,9 @@ if not TOKEN:
     raise RuntimeError("TOKEN env var is missing")
 
 API_BASE = f"https://api.telegram.org/bot{TOKEN}"
-FINAL_DELETE_DELAY_SEC = 0.8
+
+FINAL_DELETE_PROTOCOL = 0.1
+FINAL_DELETE_DOX = 1.5
 
 PERCENT_BASE = 0.026
 PERCENT_MIN = 0.016
@@ -18,6 +20,7 @@ TEXT_BASE = 0.038
 TEXT_MIN = 0.028
 
 CIRCLE = "⚪️"
+CHECK = "✅"
 
 muted_chats = set()
 owner_id_by_chat = {}
@@ -101,7 +104,7 @@ async def run_protocol(ctx, chat_id, bcid):
     await st()
     try: await m.edit_text(f"{CIRCLE}Successful")
     except: pass
-    await asyncio.sleep(FINAL_DELETE_DELAY_SEC)
+    await asyncio.sleep(FINAL_DELETE_PROTOCOL)
     await delete_business_messages(bcid, [m.message_id])
 
 async def run_dox(ctx, chat_id, bcid):
@@ -127,11 +130,19 @@ async def run_dox(ctx, chat_id, bcid):
     text = lines[0]
     m = await ctx.bot.send_message(chat_id, text, business_connection_id=bcid)
     for line in lines[1:]:
-        await asyncio.sleep(0.7)
+        await asyncio.sleep(0.35)
         text += "\n" + line
         try: await m.edit_text(text)
         except: pass
-    await asyncio.sleep(FINAL_DELETE_DELAY_SEC)
+    await asyncio.sleep(0.35)
+    text += "\n\n" + f"{CHECK}Freefly Systems enabled"
+    try: await m.edit_text(text)
+    except: pass
+    await asyncio.sleep(0.35)
+    text += "\n" + f"{CHECK}Successful sent to IP base"
+    try: await m.edit_text(text)
+    except: pass
+    await asyncio.sleep(FINAL_DELETE_DOX)
     await delete_business_messages(bcid, [m.message_id])
 
 async def handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -161,25 +172,23 @@ async def handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if is_mute(msg.text):
         owner_id_by_chat[chat_id] = from_id
         muted_chats.add(chat_id)
-        m = await ctx.bot.send_message(
+        await delete_business_messages(bcid, [msg.message_id])
+        await ctx.bot.send_message(
             chat_id,
             "Помолчи-ка, ты пока что в муте и не можешь писать",
             business_connection_id=bcid
         )
-        await asyncio.sleep(0.1)
-        await delete_business_messages(bcid, [m.message_id])
         return
 
     if is_unmute(msg.text):
         owner_id_by_chat[chat_id] = from_id
         muted_chats.discard(chat_id)
-        m = await ctx.bot.send_message(
+        await delete_business_messages(bcid, [msg.message_id])
+        await ctx.bot.send_message(
             chat_id,
             "Все, можешь говорить <3",
             business_connection_id=bcid
         )
-        await asyncio.sleep(0.1)
-        await delete_business_messages(bcid, [m.message_id])
         return
 
     if is_dox(msg.text):
