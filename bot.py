@@ -69,8 +69,6 @@ BAD_PATTERNS = [
 ]
 BAD_RE = re.compile("|".join(BAD_PATTERNS), flags=re.IGNORECASE | re.UNICODE)
 
-_http = None
-
 def cmd(t: str) -> str:
     return (t or "").strip()
 
@@ -78,16 +76,10 @@ def is_cmd(t: str, base: str) -> bool:
     t = cmd(t)
     return t == base or t.startswith(base + " ")
 
-async def session():
-    global _http
-    if _http is None or _http.closed:
-        _http = aiohttp.ClientSession()
-    return _http
-
 async def tg_post(method: str, payload: dict):
     try:
-        s = await session()
-        await s.post(f"{API_BASE}/{method}", json=payload, timeout=12)
+        async with aiohttp.ClientSession() as s:
+            await s.post(f"{API_BASE}/{method}", json=payload, timeout=12)
     except:
         pass
 
@@ -97,10 +89,12 @@ async def del_msgs(bcid, ids):
 
 async def edit_msg(bcid, chat_id, mid, text):
     if bcid:
-        await tg_post(
-            "editMessageText",
-            {"business_connection_id": bcid, "chat_id": chat_id, "message_id": mid, "text": text},
-        )
+        await tg_post("editMessageText", {
+            "business_connection_id": bcid,
+            "chat_id": chat_id,
+            "message_id": mid,
+            "text": text
+        })
 
 def mask_bad_regex(text: str) -> str:
     return BAD_RE.sub(lambda m: "*" * len(m.group(0)), text)
@@ -149,23 +143,21 @@ async def llm_chat(messages, max_tokens=220, temperature=0.9):
         "max_tokens": max_tokens,
     }
     try:
-        s = await session()
-        async with s.post(url, json=payload, headers=headers, timeout=18) as r:
-            j = await r.json()
-            c = j.get("choices", [{}])[0].get("message", {}).get("content", "")
-            c = (c or "").strip()
-            return c or None
+        async with aiohttp.ClientSession() as s:
+            async with s.post(url, json=payload, headers=headers, timeout=18) as r:
+                j = await r.json()
+                c = j.get("choices", [{}])[0].get("message", {}).get("content", "")
+                c = (c or "").strip()
+                return c or None
     except:
         return None
 
 async def ai_answer_any(text: str):
     m = await llm_chat([
-        {"role": "system", "content": "Ты дружелюбный собеседник. Отвечай на русском, естественно, коротко/средне. Без упоминаний, что ты бот. Не задавай много вопросов подряд."},
+        {"role": "system", "content": "Ты дружелюбный собеседник. Отвечай на русском, естественно, коротко/средне. Без упоминаний, что ты бот. Отвечай на ЛЮБОЙ вопрос по смыслу. Если не хватает деталей — предположи и ответь, потом уточни одним вопросом."},
         {"role": "user", "content": text},
-    ], max_tokens=220, temperature=0.95)
-    if m:
-        return m
-    return "Понял 🙂"
+    ], max_tokens=260, temperature=0.95)
+    return m or "Понял 🙂"
 
 async def ai_pick_emoji(text: str):
     m = await llm_chat([
@@ -173,9 +165,8 @@ async def ai_pick_emoji(text: str):
         {"role": "user", "content": text},
     ], max_tokens=8, temperature=0.7)
     if m:
-        m = m.strip()
-        m = m.split()[0]
-        if len(m) <= 4:
+        m = (m.strip().split() or [""])[0]
+        if len(m) <= 6:
             return m
     return random.choice(["🙂", "😄", "✨"])
 
@@ -183,13 +174,12 @@ async def ai_clean_text(text: str):
     m = await llm_chat([
         {"role": "system", "content": "Замени ВСЕ русские матерные/оскорбительные слова на звёздочки той же длины. Не меняй остальные слова, пробелы и пунктуацию. Ответь только итоговым текстом."},
         {"role": "user", "content": text},
-    ], max_tokens=260, temperature=0.0)
-    if m:
-        return m
-    return mask_bad_regex(text)
+    ], max_tokens=320, temperature=0.0)
+    return m or mask_bad_regex(text)
 
 async def run_protocol(ctx, chat_id, bcid):
     m = await ctx.bot.send_message(chat_id, "Encrypting 1%", business_connection_id=bcid)
+
     p = 1
     while p < 100:
         await sp()
@@ -344,18 +334,9 @@ async def handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         if new != text:
             await edit_msg(bcid, chat_id, msg.message_id, new)
 
-async def shutdown(app: Application):
-    global _http
-    try:
-        if _http and not _http.closed:
-            await _http.close()
-    except:
-        pass
-
 def main():
     app = Application.builder().token(TOKEN).build()
     app.add_handler(TypeHandler(Update, handler))
-    app.post_shutdown.append(shutdown)
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
