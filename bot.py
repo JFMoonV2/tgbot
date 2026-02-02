@@ -33,9 +33,9 @@ async def delete_business_messages(business_connection_id: str | None, message_i
 
 def rand_inc() -> int:
     r = random.random()
-    if r < 0.48:
+    if r < 0.45:
         return 1
-    if r < 0.80:
+    if r < 0.79:
         return 2
     if r < 0.93:
         return 3
@@ -46,7 +46,7 @@ def build_steps() -> list[str]:
     p = 1
     steps.append(f"Encrypting {p}%")
     while p < 93:
-        if random.random() < 0.06:
+        if random.random() < 0.05:
             steps.append(f"Encrypting {p}%")
             continue
         p = min(93, p + rand_inc())
@@ -54,20 +54,18 @@ def build_steps() -> list[str]:
 
     steps.append("⚪️Encrypting completed")
 
-    steps.append("Opening json codec.")
     loops = random.randint(3, 4)
     for _ in range(loops):
+        steps.append("Opening json codec.")
         steps.append("Opening json codec..")
         steps.append("Opening json codec...")
-        if random.random() < 0.35:
-            steps.append("Opening json codec....")
 
     steps.append("⚪️Success")
 
     rp = 1
     steps.append(f"Rematching data {rp}%")
     while rp < 96:
-        if random.random() < 0.06:
+        if random.random() < 0.05:
             steps.append(f"Rematching data {rp}%")
             continue
         rp = min(96, rp + rand_inc())
@@ -96,10 +94,10 @@ async def handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         business_connection_id=bcid,
     )
 
-    base = 0.11
+    base = 0.085
     for i in range(1, len(steps)):
-        jitter = random.uniform(-0.025, 0.06)
-        await asyncio.sleep(max(0.065, base + jitter))
+        jitter = random.uniform(-0.02, 0.045)
+        await asyncio.sleep(max(0.05, base + jitter))
         try:
             await sent.edit_text(steps[i])
         except Exception:
