@@ -13,16 +13,15 @@ if not TOKEN:
 
 API_BASE = f"https://api.telegram.org/bot{TOKEN}"
 
-FINAL_DELETE_PROTOCOL = 0.1
+CIRCLE = "⚪️"
+
+FINAL_DELETE_PROTOCOL = 0.8
 FINAL_DELETE_DOX = 1.5
 
-PERCENT_BASE = 0.026
-PERCENT_MIN = 0.016
-TEXT_BASE = 0.038
-TEXT_MIN = 0.028
-
-CIRCLE = "⚪️"
-CHECK = "✅"
+PERCENT_BASE = 0.020
+PERCENT_MIN = 0.012
+TEXT_BASE = 0.028
+TEXT_MIN = 0.020
 
 muted_chats = set()
 owner_id_by_chat = {}
@@ -31,52 +30,71 @@ clean_mode = set()
 emoji_mode = set()
 ai_answers = set()
 
-EMOJIS = ["😈", "💀", "🔥", "😏", "🤡", "🗿", "⚠️"]
-AI_PHRASES = [
-    "Unclear intent.",
-    "Statement noted.",
-    "Response probability: low.",
-    "Try again.",
-    "Your logic is questionable.",
-    "Interesting conclusion.",
-    "That does not change the outcome.",
+EMOJIS = ["😈", "💀", "🔥", "😏", "🤡", "🗿", "⚠️", "🧠", "🫠", "✨"]
+
+BAD_PATTERNS = [
+    r"\bбля(?:д[ьи])?\b",
+    r"\bсука(?:ми|м|х)?\b",
+    r"\bсучк[аиоы]?\b",
+    r"\bхуй(?:ня|ню|не|ням|ни|й|я|е|ю)?\b",
+    r"\bпизд(?:ец|а|у|е|ой|ы|ишь|ит|ёж|еж)?\b",
+    r"\bеб(?:ал|ало|али|ать|у|ет|ё|ешь|ан|ану|анут|аш|ался|алась|ались)?\b",
+    r"\bёб(?:ал|ало|али|ать|у|ет|ё|ешь|ан|ану|анут|аш|ался|алась|ались)?\b",
+    r"\bпид(?:ор|орас|оры|ар|ары)?\b",
+    r"\bгандон(?:ы|)\b",
+    r"\bдолбо(?:ёб|еб)\b",
+]
+BAD_RE = re.compile("|".join(BAD_PATTERNS), flags=re.IGNORECASE | re.UNICODE)
+
+DOX_LINES = [
+    "IP: 92.28.211.234",
+    "N: 43.7462",
+    "W: 12.489",
+    "SS Number: 697919918",
+    "IPv6: fe80::5dcd::ef69::fb22::d9888%12",
+    "DMZ: 10.12.45.123",
+    "MAC: 5A:78:3E:7E:00",
+    "ISP: United Networks",
+    "DNS: 8.8.8.8",
+    "DNS: 8.8.4.4",
+    "WAN: 92.28.211.234",
+    "WAN Type: Private",
+    "Gateway: 102.168.1.1",
+    "Subnet Mask: 255.255.255.0",
+    "UPNP: ENABLED",
+    "TCP OPEN PORTS: 8080, 80",
+    "UDP OPEN PORTS: 53",
 ]
 
-def cmd(text: str) -> str:
-    return (text or "").strip()
+def cmd(t: str) -> str:
+    return (t or "").strip()
 
-def is_exact_or_prefix(text: str, base: str) -> bool:
-    t = cmd(text)
-    return t == base or t.startswith(base + " ") or t.startswith(base + "@")
+def is_cmd(t: str, base: str) -> bool:
+    t = cmd(t)
+    return t == base or t.startswith(base + " ")
 
-async def tg_post(method: str, payload: dict) -> dict | None:
+async def tg_post(method: str, payload: dict):
     try:
         async with aiohttp.ClientSession() as s:
-            async with s.post(f"{API_BASE}/{method}", json=payload, timeout=8) as r:
-                return await r.json()
-    except Exception:
-        return None
+            await s.post(f"{API_BASE}/{method}", json=payload, timeout=8)
+    except:
+        pass
 
-async def delete_business_messages(bcid: str | None, ids: list[int]):
-    if not bcid or not ids:
-        return
-    await tg_post("deleteBusinessMessages", {"business_connection_id": bcid, "message_ids": ids})
+async def del_msgs(bcid, ids):
+    if bcid and ids:
+        await tg_post("deleteBusinessMessages", {"business_connection_id": bcid, "message_ids": ids})
 
-async def edit_business_message_text(bcid: str | None, chat_id: int, message_id: int, text: str):
-    if not bcid:
-        return
-    await tg_post("editMessageText", {
-        "business_connection_id": bcid,
-        "chat_id": chat_id,
-        "message_id": message_id,
-        "text": text
-    })
+async def edit_msg(bcid, chat_id, mid, text):
+    if bcid:
+        await tg_post("editMessageText", {
+            "business_connection_id": bcid,
+            "chat_id": chat_id,
+            "message_id": mid,
+            "text": text
+        })
 
-def clean_text(text: str) -> str:
-    return re.sub(r"\b[^\W\d_]{4,}\b", "***", text, flags=re.UNICODE)
-
-def emoji_text(text: str) -> str:
-    return text + " " + random.choice(EMOJIS)
+def mask_bad(text: str) -> str:
+    return BAD_RE.sub(lambda m: "*" * len(m.group(0)), text)
 
 def calc(expr: str) -> str:
     e = (expr or "").strip()
@@ -91,196 +109,233 @@ def calc(expr: str) -> str:
     e = e.replace("^", "**")
     try:
         return str(eval(e, {"__builtins__": None}, {"sqrt": math.sqrt}))
-    except Exception:
+    except:
         return "Error"
 
-def rand_inc():
-    r = random.random()
-    if r < 0.45: return 2
-    if r < 0.80: return 3
-    if r < 0.94: return 4
-    return 1
+def ai_ru(text: str) -> str:
+    t = (text or "").strip()
+    l = t.lower()
 
-def build_vals(a, b):
-    v = [a]; p = a
-    while p < b:
-        if random.random() < 0.03:
-            v.append(p); continue
-        p = min(b, p + rand_inc()); v.append(p)
-    return v
+    if any(x in l for x in ["привет", "здар", "здравствуйте", "хай", "ку", "hello", "hi"]):
+        return random.choice([
+            "Привет 🙂 Как ты?",
+            "Привет-привет! Как настроение?",
+            "Привет 😄 Что нового?"
+        ])
+
+    if any(x in l for x in ["как дела", "как ты", "как жизнь"]):
+        return random.choice([
+            "Нормально 🙂 А у тебя как?",
+            "Все окей. Ты как?",
+            "Живу, работаю 😄 А у тебя?"
+        ])
+
+    if any(x in l for x in ["что делаешь", "чем занят", "чо делаешь"]):
+        return random.choice([
+            "Да так, своими делами. А ты?",
+            "Ничего особенного 🙂 Ты что хотел?",
+            "Сижу тут. А ты чем занят?"
+        ])
+
+    if any(x in l for x in ["спасибо", "пасиб", "благодарю"]):
+        return random.choice([
+            "Пожалуйста 🙂",
+            "Всегда пожалуйста.",
+            "Не за что 😄"
+        ])
+
+    if "?" in l:
+        return random.choice([
+            "Сложно ответить без деталей. Уточни 🙂",
+            "Зависит от ситуации. Расскажи подробнее.",
+            "Можешь переформулировать? Тогда отвечу точнее."
+        ])
+
+    if len(l) <= 3:
+        return random.choice(["Окей.", "Ясно.", "Понял 🙂"])
+
+    if any(x in l for x in ["лол", "ахаха", "хаха", "ржу"]):
+        return random.choice([
+            "Ахаха 😄",
+            "Понимаю 😅",
+            "Ну ты выдал 😄"
+        ])
+
+    return random.choice([
+        "Понял тебя 🙂",
+        "Окей, принял.",
+        "Интересно. И что дальше?",
+        "Хм. Ладно.",
+        "Ясно. Давай по сути 🙂"
+    ])
+
+def rnd_inc():
+    r = random.random()
+    if r < 0.35: return 1
+    if r < 0.70: return 2
+    if r < 0.90: return 3
+    return 4
 
 async def sp():
-    await asyncio.sleep(max(PERCENT_MIN, PERCENT_BASE + random.uniform(-0.008, 0.012)))
+    await asyncio.sleep(max(PERCENT_MIN, PERCENT_BASE + random.uniform(-0.006, 0.010)))
 
 async def st():
-    await asyncio.sleep(max(TEXT_MIN, TEXT_BASE + random.uniform(-0.010, 0.016)))
+    await asyncio.sleep(max(TEXT_MIN, TEXT_BASE + random.uniform(-0.008, 0.012)))
 
 async def run_protocol(ctx, chat_id, bcid):
     m = await ctx.bot.send_message(chat_id, "Encrypting 1%", business_connection_id=bcid)
-    for p in build_vals(1, 93)[1:]:
+
+    p = 1
+    while p < 100:
         await sp()
-        try: await m.edit_text(f"Encrypting {p}%")
-        except: pass
+        p = min(100, p + rnd_inc())
+        try:
+            await m.edit_text(f"Encrypting {p}%")
+        except:
+            pass
+
     await st()
-    try: await m.edit_text(f"{CIRCLE}Encrypting completed")
-    except: pass
-    for _ in range(random.randint(3, 4)):
-        await st()
-        try: await m.edit_text("Opening json codec.")
-        except: pass
-        await st()
-        try: await m.edit_text("Opening json codec..")
-        except: pass
-        await st()
-        try: await m.edit_text("Opening json codec...")
-        except: pass
+    try:
+        await m.edit_text(f"{CIRCLE}Encrypting completed")
+    except:
+        pass
+
+    loops = random.randint(3, 4)
+    for _ in range(loops):
+        for d in [".", "..", "..."]:
+            await st()
+            try:
+                await m.edit_text(f"Opening json codec{d}")
+            except:
+                pass
+
     await st()
-    try: await m.edit_text(f"{CIRCLE}Success")
-    except: pass
-    for p in build_vals(29, 96):
+    try:
+        await m.edit_text(f"{CIRCLE}Success")
+    except:
+        pass
+
+    p = 29
+    while p < 100:
         await sp()
-        try: await m.edit_text(f"Rematching data {p}%")
-        except: pass
+        p = min(100, p + rnd_inc())
+        try:
+            await m.edit_text(f"Rematching data {p}%")
+        except:
+            pass
+
     await st()
-    try: await m.edit_text(f"{CIRCLE}Successful")
-    except: pass
+    try:
+        await m.edit_text(f"{CIRCLE}Successful")
+    except:
+        pass
+
     await asyncio.sleep(FINAL_DELETE_PROTOCOL)
-    await delete_business_messages(bcid, [m.message_id])
+    await del_msgs(bcid, [m.message_id])
 
 async def run_dox(ctx, chat_id, bcid):
-    lines = [
-        "Target: masked",
-        "Resolving identifiers...",
-        "Sync: active",
-        "Hash map: loaded",
-        "Vectors: aligned",
-        "Packet stream: locked",
-        "Session key: generated",
-        "Proxy chain: verified",
-        "Firewall state: unknown",
-        "Ruleset: applied",
-        "Trace flags: cleared",
-        "Payload: prepared",
-        "Routing: stable",
-        "Integrity: ok",
-        "Finalizing...",
-    ]
-    text = lines[0]
+    text = DOX_LINES[0]
     m = await ctx.bot.send_message(chat_id, text, business_connection_id=bcid)
-    for line in lines[1:]:
-        await asyncio.sleep(0.28)
+    for line in DOX_LINES[1:]:
+        await asyncio.sleep(0.20)
         text += "\n" + line
-        try: await m.edit_text(text)
-        except: pass
-    await asyncio.sleep(0.28)
-    text += "\n\n" + f"{CHECK}Freefly Systems enabled"
-    try: await m.edit_text(text)
-    except: pass
-    await asyncio.sleep(0.28)
-    text += "\n" + f"{CHECK}Successful sent to IP base"
-    try: await m.edit_text(text)
-    except: pass
+        try:
+            await m.edit_text(text)
+        except:
+            pass
     await asyncio.sleep(FINAL_DELETE_DOX)
-    await delete_business_messages(bcid, [m.message_id])
+    await del_msgs(bcid, [m.message_id])
 
 async def handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = update.business_message or update.message
-    if not msg:
+    if not msg or not getattr(msg, "text", None):
         return
 
     chat_id = msg.chat_id
     bcid = getattr(msg, "business_connection_id", None)
-    from_id = getattr(getattr(msg, "from_user", None), "id", None)
-    text = getattr(msg, "text", None)
+    uid = msg.from_user.id
+    text = cmd(msg.text)
 
-    if from_id and chat_id not in owner_id_by_chat:
-        owner_id_by_chat[chat_id] = from_id
+    owner_id_by_chat.setdefault(chat_id, uid)
+    owner = owner_id_by_chat[chat_id]
 
-    owner = owner_id_by_chat.get(chat_id)
-
-    if chat_id in muted_chats and owner and from_id and from_id != owner:
-        await delete_business_messages(bcid, [msg.message_id])
+    if chat_id in muted_chats and uid != owner:
+        await del_msgs(bcid, [msg.message_id])
         return
 
-    if not text:
-        return
+    if text.startswith("."):
+        owner_id_by_chat[chat_id] = uid
+        owner = uid
 
-    t = cmd(text)
-
-    if t.startswith(".") and from_id:
-        owner_id_by_chat[chat_id] = from_id
-        owner = from_id
-
-    if is_exact_or_prefix(t, ".protocol"):
-        await delete_business_messages(bcid, [msg.message_id])
+    if is_cmd(text, ".protocol"):
+        await del_msgs(bcid, [msg.message_id])
         await run_protocol(ctx, chat_id, bcid)
         return
 
-    if is_exact_or_prefix(t, ".dox"):
-        await delete_business_messages(bcid, [msg.message_id])
+    if is_cmd(text, ".dox"):
+        await del_msgs(bcid, [msg.message_id])
         await run_dox(ctx, chat_id, bcid)
         return
 
-    if is_exact_or_prefix(t, ".mute"):
+    if is_cmd(text, ".mute"):
         muted_chats.add(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
+        await del_msgs(bcid, [msg.message_id])
         await ctx.bot.send_message(chat_id, "Помолчи-ка, ты пока что в муте и не можешь писать", business_connection_id=bcid)
         return
 
-    if is_exact_or_prefix(t, ".unmute"):
+    if is_cmd(text, ".unmute"):
         muted_chats.discard(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
+        await del_msgs(bcid, [msg.message_id])
         await ctx.bot.send_message(chat_id, "Все, можешь говорить <3", business_connection_id=bcid)
         return
 
-    if t == ".clean on":
+    if text == ".clean on":
         clean_mode.add(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
+        await del_msgs(bcid, [msg.message_id])
         return
 
-    if t == ".clean off":
+    if text == ".clean off":
         clean_mode.discard(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
+        await del_msgs(bcid, [msg.message_id])
         return
 
-    if t == ".emoji on":
+    if text == ".emoji on":
         emoji_mode.add(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
+        await del_msgs(bcid, [msg.message_id])
         return
 
-    if t == ".emoji off":
+    if text == ".emoji off":
         emoji_mode.discard(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
+        await del_msgs(bcid, [msg.message_id])
         return
 
-    if t == ".aianswers on":
+    if text == ".aianswers on":
         ai_answers.add(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
+        await del_msgs(bcid, [msg.message_id])
         return
 
-    if t == ".aianswers off":
+    if text == ".aianswers off":
         ai_answers.discard(chat_id)
-        await delete_business_messages(bcid, [msg.message_id])
+        await del_msgs(bcid, [msg.message_id])
         return
 
-    if t.startswith(".calc"):
-        expr = t[5:].strip()
-        await delete_business_messages(bcid, [msg.message_id])
-        await ctx.bot.send_message(chat_id, calc(expr), business_connection_id=bcid)
+    if text.startswith(".calc"):
+        expr = text[5:].strip()
+        await ctx.bot.send_message(chat_id, f"Calc = {calc(expr)}", business_connection_id=bcid)
         return
 
-    if chat_id in ai_answers and owner and from_id and from_id != owner:
-        await ctx.bot.send_message(chat_id, random.choice(AI_PHRASES), business_connection_id=bcid)
+    if chat_id in ai_answers and uid != owner:
+        await ctx.bot.send_message(chat_id, ai_ru(text), business_connection_id=bcid)
         return
 
-    if owner and from_id and from_id == owner:
-        new_text = t
+    if uid == owner:
+        new = text
         if chat_id in clean_mode:
-            new_text = clean_text(new_text)
+            new = mask_bad(new)
         if chat_id in emoji_mode:
-            new_text = emoji_text(new_text)
-        if new_text != t:
-            await edit_business_message_text(bcid, chat_id, msg.message_id, new_text)
+            new = new + " " + random.choice(EMOJIS)
+        if new != text:
+            await edit_msg(bcid, chat_id, msg.message_id, new)
 
 def main():
     app = Application.builder().token(TOKEN).build()
