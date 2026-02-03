@@ -16,41 +16,18 @@ API_ID = int(os.getenv("TG_API_ID", "0") or "0")
 API_HASH = os.getenv("TG_API_HASH", "") or ""
 SESSION_STRING = os.getenv("TG_SESSION_STRING", "") or ""
 
+OWNER_ID = int(os.getenv("OWNER_ID", "0") or "0")
+
 HF_MODEL = os.getenv("HF_MODEL", "mistralai/Mistral-7B-Instruct-v0.2")
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 HF_URL = os.getenv("HF_URL", f"https://api-inference.huggingface.co/models/{HF_MODEL}")
 
-OWNER_ID = int(os.getenv("OWNER_ID", "0") or "0")
-
-DOX_LINES_ENV = os.getenv("DOX_LINES", "").strip()
-DOX_FILE = os.getenv("DOX_FILE", "dox.txt")
-
 STATE_FILE = os.getenv("STATE_FILE", "tb_state.json")
-
 CMD_PREFIX = "."
-
 DEFAULT_EMOJI_FALLBACK = "✨"
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
-
-def _load_dox_lines() -> list[str]:
-    lines = []
-    if DOX_LINES_ENV:
-        for ln in DOX_LINES_ENV.split("\\n"):
-            ln = ln.strip()
-            if ln:
-                lines.append(ln)
-        return lines
-    try:
-        with open(DOX_FILE, "r", encoding="utf-8") as f:
-            for ln in f.read().splitlines():
-                ln = ln.strip()
-                if ln:
-                    lines.append(ln)
-    except Exception:
-        pass
-    return lines
 
 def _default_state():
     return {
@@ -85,7 +62,6 @@ def _save_state(st):
 
 STATE = _load_state()
 MUTED = set(STATE.get("muted_ids", []))
-DOX_LINES = _load_dox_lines()
 
 def _is_owner(event) -> bool:
     if OWNER_ID:
@@ -108,17 +84,16 @@ SAFE_NUMERIC_RE = re.compile(r"^[\d\s\.\+\-\*\/\%\(\)\^\,]+$")
 def _safe_eval_numeric(expr: str):
     expr = (expr or "").strip().replace("^", "**")
     node = ast.parse(expr, mode="eval")
-    allowed = (ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Constant, ast.Add, ast.Sub, ast.Mult,
-               ast.Div, ast.Mod, ast.Pow, ast.USub, ast.UAdd, ast.FloorDiv, ast.Load, ast.Call, ast.Name)
+    allowed = (
+        ast.Expression, ast.BinOp, ast.UnaryOp, ast.Num, ast.Constant,
+        ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow,
+        ast.USub, ast.UAdd, ast.FloorDiv, ast.Load
+    )
     for n in ast.walk(node):
         if not isinstance(n, allowed):
             raise ValueError("unsafe")
-        if isinstance(n, ast.Call):
-            raise ValueError("unsafe")
-        if isinstance(n, ast.Name):
-            raise ValueError("unsafe")
     val = eval(compile(node, "<calc>", "eval"), {"__builtins__": {}}, {})
-    if isinstance(val, (int, float)) and (math.isfinite(val)):
+    if isinstance(val, (int, float)) and math.isfinite(val):
         if isinstance(val, float):
             s = f"{val:.10f}".rstrip("0").rstrip(".")
             return s if s else "0"
@@ -136,16 +111,17 @@ async def _hf_generate(prompt: str, max_new_tokens: int = 128, temperature: floa
             "temperature": float(temperature),
             "top_p": float(top_p),
             "return_full_text": False,
-        }
+        },
+        "options": {"wait_for_model": True}
     }
-    timeout = aiohttp.ClientTimeout(total=22)
+    timeout = aiohttp.ClientTimeout(total=25)
     async with aiohttp.ClientSession(timeout=timeout) as session:
         async with session.post(HF_URL, headers=headers, json=payload) as r:
-            txt = await r.text()
+            raw = await r.text()
             if r.status >= 400:
                 raise RuntimeError(f"hf_http_{r.status}")
             try:
-                data = json.loads(txt)
+                data = json.loads(raw)
             except Exception:
                 return ""
             if isinstance(data, list) and data:
@@ -155,26 +131,6 @@ async def _hf_generate(prompt: str, max_new_tokens: int = 128, temperature: floa
             if isinstance(data, dict) and "generated_text" in data:
                 return (data["generated_text"] or "").strip()
             return ""
-
-async def _ai_confirm(feature: str, enabled: bool, emoji_on: bool) -> str:
-    prompt = (
-        "Ты помощник для Telegram. Сгенерируй очень короткое подтверждение на русском (1 строка), "
-        f"что функция '{feature}' теперь {'включена' if enabled else 'выключена'}. "
-        "Без кавычек, без лишних пояснений."
-    )
-    out = ""
-    try:
-        out = await _hf_generate(prompt, max_new_tokens=32, temperature=0.6, top_p=0.9)
-    except Exception:
-        out = ""
-    out = (out or "").strip()
-    if not out:
-        out = "Готово."
-    if emoji_on:
-        em = await _ai_pick_emoji(out)
-        if em:
-            out = f"{out} {em}"
-    return out
 
 async def _ai_pick_emoji(text: str) -> str:
     prompt = (
@@ -186,11 +142,26 @@ async def _ai_pick_emoji(text: str) -> str:
         out = await _hf_generate(prompt, max_new_tokens=8, temperature=0.5, top_p=0.9)
     except Exception:
         out = ""
-    out = (out or "").strip()
-    out = out.split()[0] if out else ""
+    out = (out or "").strip().split()[0] if (out or "").strip() else ""
     if len(out) > 6:
         out = ""
     return out or DEFAULT_EMOJI_FALLBACK
+
+async def _ai_confirm(feature: str, enabled: bool) -> str:
+    prompt = (
+        "Сгенерируй очень короткое подтверждение на русском (1 строка), "
+        f"что функция '{feature}' теперь {'включена' if enabled else 'выключена'}. "
+        "Без кавычек, без пояснений."
+    )
+    try:
+        out = await _hf_generate(prompt, max_new_tokens=24, temperature=0.6, top_p=0.9)
+    except Exception:
+        out = ""
+    out = (out or "").strip() or "Готово."
+    if STATE.get("emoji_on", False):
+        em = await _ai_pick_emoji(out)
+        out = f"{out} {em}"
+    return out
 
 async def _ai_clean_text(text: str) -> Tuple[str, bool]:
     original = (text or "")
@@ -206,7 +177,7 @@ async def _ai_clean_text(text: str) -> Tuple[str, bool]:
         f"Текст:\n{original}"
     )
     try:
-        out = await _hf_generate(prompt, max_new_tokens=max(64, min(256, len(original) + 32)), temperature=0.2, top_p=0.9)
+        out = await _hf_generate(prompt, max_new_tokens=min(220, max(80, len(original) + 24)), temperature=0.2, top_p=0.9)
     except Exception:
         out = ""
     cleaned = (out or "").strip()
@@ -214,29 +185,25 @@ async def _ai_clean_text(text: str) -> Tuple[str, bool]:
         return original, False
     if cleaned == original:
         return original, False
-    if cleaned.lower() == original.lower() and cleaned != original:
-        return cleaned, True
     return cleaned, True
 
 async def _ai_reply(text: str, context: str = "") -> str:
     base = (
         "Ты в Telegram. Ответь естественно, дружелюбно и кратко на русском.\n"
-        "Не упоминай, что ты модель. Не используй markdown. Не добавляй лишних вступлений.\n"
+        "Не упоминай, что ты модель. Не используй markdown.\n"
     )
     if context:
         prompt = f"{base}\nКонтекст:\n{context}\n\nСообщение:\n{text}\n\nОтвет:"
     else:
         prompt = f"{base}\nСообщение:\n{text}\n\nОтвет:"
     try:
-        out = await _hf_generate(prompt, max_new_tokens=220, temperature=0.8, top_p=0.9)
+        out = await _hf_generate(prompt, max_new_tokens=240, temperature=0.8, top_p=0.9)
     except Exception:
         out = ""
-    out = (out or "").strip()
-    if not out:
-        out = "Понял."
+    out = (out or "").strip() or "Понял."
     return out
 
-async def _delete_after(client: TelegramClient, chat_id: int, msg_id: int, delay: float):
+async def _delete_after(chat_id: int, msg_id: int, delay: float):
     try:
         await asyncio.sleep(delay)
         await client.delete_messages(chat_id, msg_id)
@@ -245,7 +212,7 @@ async def _delete_after(client: TelegramClient, chat_id: int, msg_id: int, delay
 
 client = TelegramClient(StringSession(SESSION_STRING) if SESSION_STRING else "tb_session", API_ID, API_HASH)
 
-@client.on(events.NewMessage(pattern=re.compile(rf"^\{re.escape(CMD_PREFIX)}protocol(?:\s+.*)?$", re.I)))
+@client.on(events.NewMessage(pattern=re.compile(rf"^{re.escape(CMD_PREFIX)}protocol(?:\s+.*)?$", re.I)))
 async def cmd_protocol(event):
     if not _is_owner(event):
         return
@@ -256,16 +223,15 @@ async def cmd_protocol(event):
     msg = await client.send_message(event.chat_id, "0%")
     p = 0
     while p < 100:
-        inc = random.randint(1, 4)
-        p = min(100, p + inc)
+        p = min(100, p + random.randint(1, 4))
         try:
             await msg.edit(f"{p}%")
         except Exception:
             pass
         await asyncio.sleep(random.uniform(0.12, 0.28))
-    asyncio.create_task(_delete_after(client, event.chat_id, msg.id, 0.8))
+    asyncio.create_task(_delete_after(event.chat_id, msg.id, 0.8))
 
-@client.on(events.NewMessage(pattern=re.compile(rf"^\{re.escape(CMD_PREFIX)}dox(?:\s+.*)?$", re.I)))
+@client.on(events.NewMessage(pattern=re.compile(rf"^{re.escape(CMD_PREFIX)}dox(?:\s+.*)?$", re.I)))
 async def cmd_dox(event):
     if not _is_owner(event):
         return
@@ -273,22 +239,13 @@ async def cmd_dox(event):
         await event.delete()
     except Exception:
         pass
-    lines = DOX_LINES[:] if DOX_LINES else []
-    if not lines:
-        out = ""
-        try:
-            out = await _ai_reply("Сгенерируй короткий нейтральный текст вместо dox. Не вставляй личные данные.")
-        except Exception:
-            out = "..."
-        await client.send_message(event.chat_id, out)
-        return
-    txt = "\n".join(lines)
+    out = "Команда .dox отключена по соображениям безопасности."
     if STATE.get("emoji_on", False):
-        em = await _ai_pick_emoji(txt)
-        txt = f"{txt}\n{em}"
-    await client.send_message(event.chat_id, txt)
+        em = await _ai_pick_emoji(out)
+        out = f"{out} {em}"
+    await client.send_message(event.chat_id, out)
 
-@client.on(events.NewMessage(pattern=re.compile(rf"^\{re.escape(CMD_PREFIX)}mute(?:\s+.+)?$", re.I)))
+@client.on(events.NewMessage(pattern=re.compile(rf"^{re.escape(CMD_PREFIX)}mute(?:\s+.+)?$", re.I)))
 async def cmd_mute(event):
     if not _is_owner(event):
         return
@@ -317,7 +274,7 @@ async def cmd_mute(event):
     STATE["muted_ids"] = list(MUTED)
     _save_state(STATE)
 
-@client.on(events.NewMessage(pattern=re.compile(rf"^\{re.escape(CMD_PREFIX)}unmute(?:\s+.+)?$", re.I)))
+@client.on(events.NewMessage(pattern=re.compile(rf"^{re.escape(CMD_PREFIX)}unmute(?:\s+.+)?$", re.I)))
 async def cmd_unmute(event):
     if not _is_owner(event):
         return
@@ -347,73 +304,58 @@ async def cmd_unmute(event):
         STATE["muted_ids"] = list(MUTED)
         _save_state(STATE)
 
-@client.on(events.NewMessage(pattern=re.compile(rf"^\{re.escape(CMD_PREFIX)}clean(?:\s+.+)?$", re.I)))
+@client.on(events.NewMessage(pattern=re.compile(rf"^{re.escape(CMD_PREFIX)}clean(?:\s+.+)?$", re.I)))
 async def cmd_clean(event):
     if not _is_owner(event):
         return
     args = _strip_cmd(event.raw_text)[len(CMD_PREFIX) + 5:].strip()
     val = _parse_on_off(args)
-    if val is None:
-        try:
-            await event.delete()
-        except Exception:
-            pass
-        return
-    STATE["clean_on"] = bool(val)
-    STATE["last_toggle_ts"] = _now_ms()
-    _save_state(STATE)
     try:
         await event.delete()
     except Exception:
         pass
-    txt = await _ai_confirm("clean", STATE["clean_on"], STATE.get("emoji_on", False))
-    await client.send_message(event.chat_id, txt)
+    if val is None:
+        return
+    STATE["clean_on"] = bool(val)
+    STATE["last_toggle_ts"] = _now_ms()
+    _save_state(STATE)
+    await client.send_message(event.chat_id, await _ai_confirm("clean", STATE["clean_on"]))
 
-@client.on(events.NewMessage(pattern=re.compile(rf"^\{re.escape(CMD_PREFIX)}emoji(?:\s+.+)?$", re.I)))
+@client.on(events.NewMessage(pattern=re.compile(rf"^{re.escape(CMD_PREFIX)}emoji(?:\s+.+)?$", re.I)))
 async def cmd_emoji(event):
     if not _is_owner(event):
         return
     args = _strip_cmd(event.raw_text)[len(CMD_PREFIX) + 5:].strip()
     val = _parse_on_off(args)
-    if val is None:
-        try:
-            await event.delete()
-        except Exception:
-            pass
-        return
-    STATE["emoji_on"] = bool(val)
-    STATE["last_toggle_ts"] = _now_ms()
-    _save_state(STATE)
     try:
         await event.delete()
     except Exception:
         pass
-    txt = await _ai_confirm("emoji", STATE["emoji_on"], STATE.get("emoji_on", False))
-    await client.send_message(event.chat_id, txt)
+    if val is None:
+        return
+    STATE["emoji_on"] = bool(val)
+    STATE["last_toggle_ts"] = _now_ms()
+    _save_state(STATE)
+    await client.send_message(event.chat_id, await _ai_confirm("emoji", STATE["emoji_on"]))
 
-@client.on(events.NewMessage(pattern=re.compile(rf"^\{re.escape(CMD_PREFIX)}aianswers(?:\s+.+)?$", re.I)))
+@client.on(events.NewMessage(pattern=re.compile(rf"^{re.escape(CMD_PREFIX)}aianswers(?:\s+.+)?$", re.I)))
 async def cmd_aianswers(event):
     if not _is_owner(event):
         return
     args = _strip_cmd(event.raw_text)[len(CMD_PREFIX) + 9:].strip()
     val = _parse_on_off(args)
-    if val is None:
-        try:
-            await event.delete()
-        except Exception:
-            pass
-        return
-    STATE["aianswers_on"] = bool(val)
-    STATE["last_toggle_ts"] = _now_ms()
-    _save_state(STATE)
     try:
         await event.delete()
     except Exception:
         pass
-    txt = await _ai_confirm("aianswers", STATE["aianswers_on"], STATE.get("emoji_on", False))
-    await client.send_message(event.chat_id, txt)
+    if val is None:
+        return
+    STATE["aianswers_on"] = bool(val)
+    STATE["last_toggle_ts"] = _now_ms()
+    _save_state(STATE)
+    await client.send_message(event.chat_id, await _ai_confirm("aianswers", STATE["aianswers_on"]))
 
-@client.on(events.NewMessage(pattern=re.compile(rf"^\{re.escape(CMD_PREFIX)}calc(?:\s+.+)?$", re.I)))
+@client.on(events.NewMessage(pattern=re.compile(rf"^{re.escape(CMD_PREFIX)}calc(?:\s+.+)?$", re.I)))
 async def cmd_calc(event):
     if not _is_owner(event):
         return
@@ -423,11 +365,7 @@ async def cmd_calc(event):
     except Exception:
         pass
     if not expr:
-        out = ""
-        try:
-            out = await _ai_reply("Скажи пользователю, что нужно указать выражение для .calc, очень коротко.")
-        except Exception:
-            out = "..."
+        out = "Укажи выражение после .calc"
         if STATE.get("emoji_on", False):
             em = await _ai_pick_emoji(out)
             out = f"{out} {em}"
@@ -492,9 +430,8 @@ async def on_any_message(event):
     should_answer = False
     if event.is_private:
         should_answer = True
-    if not should_answer and my_username:
-        if f"@{my_username}" in text.lower():
-            should_answer = True
+    if not should_answer and my_username and f"@{my_username}" in text.lower():
+        should_answer = True
     if not should_answer and event.is_reply and my_id:
         try:
             rep = await event.get_reply_message()
@@ -525,6 +462,8 @@ async def on_any_message(event):
         pass
 
 async def main():
+    if API_ID <= 0 or not API_HASH:
+        raise RuntimeError("TG_API_ID/TG_API_HASH не заданы")
     await client.start()
     await client.run_until_disconnected()
 
