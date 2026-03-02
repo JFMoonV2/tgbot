@@ -1,3 +1,2 @@
-telethon
+aiogram
 google-generativeai
-flask

@@ -1,58 +1,82 @@
 import os
 import asyncio
-from flask import Flask
-from threading import Thread
-from telethon import TelegramClient, events
-from telethon.sessions import StringSession
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from google.generativeai import GenerativeModel
 import google.generativeai as genai
 
-# --- ВНУТРЕННИЙ СЕРВЕР ДЛЯ ОЖИВЛЕНИЯ ---
-app = Flask('')
-@app.route('/')
-def home():
-    return "I am alive!"
+# Загрузка настроек из Render
+TOKEN = os.getenv("BOT_TOKEN")
+GEMINI_KEY = os.getenv("GEMINI_KEY")
+OWNER_ID = int(os.getenv("OWNER_ID"))
 
-def run_flask():
-    app.run(host='0.0.0.0', port=8080)
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
 
-# --- НАСТРОЙКИ БОТА ---
-API_ID = int(os.environ.get("API_ID"))
-API_HASH = os.environ.get("API_HASH")
-STRING_SESSION = os.environ.get("STRING_SESSION")
-GEMINI_KEY = os.environ.get("GEMINI_KEY")
-
+# Настройка Gemini
 genai.configure(api_key=GEMINI_KEY)
-ai_model = genai.GenerativeModel('gemini-1.5-flash')
+model = GenerativeModel('gemini-pro')
 
-client = TelegramClient(StringSession(STRING_SESSION), API_ID, API_HASH)
+# Список замученных (хранится в памяти, пока бот запущен)
 muted_users = set()
-ai_chats = set()
 
-@client.on(events.NewMessage(outgoing=True))
-async def cmd_handler(event):
-    global muted_users, ai_chats
-    text = event.text.lower()
-    if ".mute" in text and event.is_reply:
-        rep = await event.get_reply_message()
-        muted_users.add(rep.from_id.user_id)
-        await event.edit("🤐 Заткнул.")
-    elif ".ai_on" in text:
-        ai_chats.add(event.chat_id)
-        await event.edit("🤖 AI ON.")
+# Проверка, что пишет именно владелец
+def is_owner(message: types.Message):
+    return message.from_user.id == OWNER_ID
 
-@client.on(events.NewMessage(incoming=True))
-async def main_handler(event):
-    if event.sender_id in muted_users:
-        await event.delete(revoke=True)
-    if event.chat_id in ai_chats and event.is_private:
-        res = ai_model.generate_content(f"Ответь как я: {event.text}")
-        await event.reply(res.text)
+# КОМАНДА .MUTE
+@dp.message(F.text.startswith(".mute"), is_owner)
+async def mute_user(message: types.Message):
+    if not message.reply_to_message:
+        return await message.answer("Ответь этой командой на сообщение того, кого хочешь замутить.")
+    
+    user_id = message.reply_to_message.from_user.id
+    muted_users.add(user_id)
+    await message.answer(f"🚫 Пользователь {user_id} теперь в муте. Его сообщения будут удаляться.")
 
-# --- ЗАПУСК ---
-def start_bot():
-    Thread(target=run_flask).start() # Запускаем веб-сервер в фоне
-    client.start()
-    client.run_until_disconnected()
+# КОМАНДА .UNMUTE
+@dp.message(F.text.startswith(".unmute"), is_owner)
+async def unmute_user(message: types.Message):
+    if not message.reply_to_message:
+        return await message.answer("Ответь этой командой на сообщение.")
+    
+    user_id = message.reply_to_message.from_user.id
+    muted_users.discard(user_id)
+    await message.answer(f"✅ Пользователь {user_id} размучен.")
+
+# КОМАНДА .DOX
+@dp.message(F.text.startswith(".dox"), is_owner)
+async def dox_user(message: types.Message):
+    target = message.reply_to_message.from_user if message.reply_to_message else message.from_user
+    
+    info = (
+        f"🔍 **DOSSIER: {target.full_name}**\n"
+        f"🆔 **ID:** `{target.id}`\n"
+        f"👤 **Username:** @{target.username if target.username else 'нет'}\n"
+        f"🤖 **Bot:** {'Да' if target.is_bot else 'Нет'}\n"
+        f"🔗 **History:** [Check Names](https://t.me/SangMataInfo_bot?start={target.id})"
+    )
+    await message.answer(info, parse_mode="Markdown")
+
+# КОМАНДА .AI
+@dp.message(F.text.startswith(".ai "), is_owner)
+async def ai_chat(message: types.Message):
+    prompt = message.text[4:]
+    response = model.generate_content(prompt)
+    await message.answer(f"🤖 **Gemini:**\n{response.text}")
+
+# УДАЛЕНИЕ СООБЩЕНИЙ ЗАМУЧЕННЫХ
+@dp.message()
+async def auto_delete(message: types.Message):
+    if message.from_user.id in muted_users:
+        try:
+            await message.delete()
+        except:
+            pass
+
+async def main():
+    print("Бот запущен через Telegram Business!")
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    start_bot()
+    asyncio.run(main())
